@@ -1,31 +1,37 @@
 #!/bin/bash
+set -e
 
-INCLUDE_SIMULATOR=true
+# Builds FSCalendar.xcframework (device arm64 + simulator arm64/x86_64) from the FSCalendar sources
+# checked out next to this repository (git clone --branch 2.8.4 https://github.com/WenchaoD/FSCalendar.git).
+# A fat .framework cannot carry the arm64 simulator slice next to the arm64 device one, hence the xcframework.
+
 PROJECT_PATH="../../FSCalendar/FSCalendarExamples.xcworkspace"
-BUILD_PATH="build/Build/Products"
-PROJECT="FSCalendar"
+SCHEME="FSCalendar"
+ARCHIVES="build/archives"
+SETTINGS="SKIP_INSTALL=NO BUILD_LIBRARY_FOR_DISTRIBUTION=YES IPHONEOS_DEPLOYMENT_TARGET=12.0"
 
-echo "Build iOS framework for simulator and device"
-rm -Rf "Aztec.framework"
-if $INCLUDE_SIMULATOR; then
-    xcodebuild -sdk iphonesimulator -workspace $PROJECT_PATH -scheme FSCalendar -arch x86_64 -configuration Release -derivedDataPath "build" > /dev/null
-fi
-xcodebuild -sdk iphoneos -workspace $PROJECT_PATH -scheme FSCalendar -arch arm64 -configuration Release -derivedDataPath "build" > /dev/null
+rm -Rf "build" "FSCalendar.framework" "FSCalendar.xcframework"
 
-echo "Create fat binaries for Release-iphoneos and Release-iphonesimulator configuration"
-echo "Copy one build as a fat framework"
+echo "Archive the device framework"
+xcodebuild archive -workspace $PROJECT_PATH -scheme $SCHEME -configuration Release \
+    -destination "generic/platform=iOS" -archivePath "$ARCHIVES/ios" $SETTINGS > /dev/null
 
-if $INCLUDE_SIMULATOR; then
-    echo "Combine modules from another build with the fat framework modules"
-    cp -R "$BUILD_PATH/Release-iphonesimulator/$PROJECT.framework/Modules/$PROJECT.swiftmodule/" "$BUILD_PATH/Release-iphoneos/$PROJECT.framework/Modules/$PROJECT.swiftmodule/"
-    echo "Combine iphoneos + iphonesimulator configuration as fat libraries"
-    lipo -create -output "$BUILD_PATH/Release-iphoneos/$PROJECT.framework/$PROJECT" "$BUILD_PATH/Release-iphoneos/$PROJECT.framework/$PROJECT" "$BUILD_PATH/Release-iphonesimulator/$PROJECT.framework/$PROJECT"
-fi
+echo "Archive the simulator framework"
+xcodebuild archive -workspace $PROJECT_PATH -scheme $SCHEME -configuration Release \
+    -destination "generic/platform=iOS Simulator" -archivePath "$ARCHIVES/ios-simulator" $SETTINGS > /dev/null
 
-cp -R "$BUILD_PATH/Release-iphoneos/FSCalendar.framework" "."
+echo "Create the xcframework"
+xcodebuild -create-xcframework \
+    -framework "$ARCHIVES/ios.xcarchive/Products/Library/Frameworks/FSCalendar.framework" \
+    -framework "$ARCHIVES/ios-simulator.xcarchive/Products/Library/Frameworks/FSCalendar.framework" \
+    -output "FSCalendar.xcframework"
+
 rm -Rf "build"
 
 echo "Verify results"
-lipo -info "FSCalendar.framework/FSCalendar"
+for slice in FSCalendar.xcframework/ios-*; do
+    echo "$(basename "$slice"): $(lipo -archs "$slice/FSCalendar.framework/FSCalendar")"
+done
 
-sharpie bind --sdk=iphoneos --namespace=FSCalendar -scope FSCalendar.framework/Headers/ FSCalendar.framework/Headers/*.h
+# Regenerate the API definitions only when the headers change (then diff against ApiDefinitions.cs):
+# sharpie bind --sdk=iphoneos --namespace=FSCalendar -scope FSCalendar.xcframework/ios-arm64/FSCalendar.framework/Headers/ FSCalendar.xcframework/ios-arm64/FSCalendar.framework/Headers/*.h
